@@ -84,72 +84,128 @@ export function fitCircle(points) {
 
 
 /**
- * Detect a pipe profile in the laser line using iterative RANSAC-like approach.
+ * Detect a pipe profile in the laser line using a robust RANSAC approach.
  * 
  * Strategy:
- *   1. Find the "peak" region (points closest to the camera, i.e. smallest Z)
- *   2. Grow region outward from peak while residual to circle fit stays small
- *   3. Validate fitted circle against expected diameter
+ *   1. Define a search region (around prevResult or global peak).
+ *   2. Use RANSAC:
+ *      - Randomly sample 3 points to define a candidate circle.
+ *      - Validate radius against expectedDiameter.
+ *      - Count inliers (points within tolerance distance of the circle boundary).
+ *   3. Pick the candidate with the most inliers.
+ *   4. Refine the fit using all inliers from the best candidate.
  *
  * @param {{ x: number, z: number }[]} points         3D profile points
  * @param {number}                      expectedDiameter Expected pipe diameter (mm)
- * @param {number}                      tolerance       Radius tolerance fraction (default 0.25 = ±25%)
+ * @param {object}                      [options]       Detection options
+ * @param {object}                      [options.prevResult] Last successful detection (for tracking)
+ * @param {number}                      [options.tolerance=10] Inlier distance tolerance (mm)
  * @returns {{ cx: number, cz: number, radius: number, rms: number, inlierStart: number, inlierEnd: number, diameter: number } | null}
  */
-export function detectPipe(points, expectedDiameter, tolerance = 0.25) {
-    if (points.length < 10) return null;
+export function detectPipe(points, expectedDiameter, options = {}) {
+    if (points.length < 15) return null;
 
+    const { prevResult = null, tolerance = 8 } = options;
     const expectedRadius = expectedDiameter / 2;
+    const radTol = expectedRadius * 0.25;
 
-    // Step 1: Find the point with minimum Z (closest to camera = top of pipe)
-    let minZ = Infinity;
-    let minIdx = 0;
-    for (let i = 0; i < points.length; i++) {
-        if (points[i].z < minZ) {
-            minZ = points[i].z;
-            minIdx = i;
+    // 1. Identify candidate points (the search window)
+    let searchIndices = [];
+    if (prevResult && prevResult.cx !== undefined) {
+        // Look within ±1.5 radius of previous center
+        const xMin = prevResult.cx - expectedRadius * 1.5;
+        const xMax = prevResult.cx + expectedRadius * 1.5;
+        for (let i = 0; i < points.length; i++) {
+            if (points[i].x >= xMin && points[i].x <= xMax) searchIndices.push(i);
         }
     }
 
-    // Step 2: Expand a window around the peak and try circle fitting
-    let bestFit = null;
-    let bestScore = Infinity;
-    let bestStart = 0, bestEnd = 0;
+    // Fallback/Expand: If search indices are too few, or no prev result, use most of the profile
+    if (searchIndices.length < 20) {
+        searchIndices = points.map((_, i) => i);
+    }
 
-    // Try different window sizes around the peak
-    for (let halfWin = 5; halfWin < Math.floor(points.length / 2); halfWin += 2) {
-        const start = Math.max(0, minIdx - halfWin);
-        const end = Math.min(points.length - 1, minIdx + halfWin);
-        const subset = points.slice(start, end + 1);
+    // 2. RANSAC Loop
+    let bestInliers = [];
+    let bestCircle = null;
+    const iterations = 100;
 
-        if (subset.length < 8) continue;
+    for (let iter = 0; iter < iterations; iter++) {
+        // Randomly pick 3 indices
+        const idx1 = searchIndices[Math.floor(Math.random() * searchIndices.length)];
+        const idx2 = searchIndices[Math.floor(Math.random() * searchIndices.length)];
+        const idx3 = searchIndices[Math.floor(Math.random() * searchIndices.length)];
+        if (idx1 === idx2 || idx2 === idx3 || idx1 === idx3) continue;
 
-        const fit = fitCircle(subset);
-        if (!fit) continue;
+        const p1 = points[idx1], p2 = points[idx2], p3 = points[idx3];
 
-        // Check if radius matches expected
-        const radiusError = Math.abs(fit.radius - expectedRadius) / expectedRadius;
-        if (radiusError > tolerance) continue;
+        // Geometric circle from 3 points
+        const circle = getCircleFrom3Points(p1, p2, p3);
+        if (!circle) continue;
 
-        // Score: prefer low RMS and radius close to expected
-        const score = fit.rms + radiusError * expectedRadius * 0.5;
-        if (score < bestScore) {
-            bestScore = score;
-            bestFit = fit;
-            bestStart = start;
-            bestEnd = end;
+        // Constraint: Radius must be reasonably close to expected
+        if (Math.abs(circle.radius - expectedRadius) > radTol) continue;
+
+        // Constraint: Center must be "below" the points (larger Z)
+        if (circle.cz < p1.z && circle.cz < p2.z && circle.cz < p3.z) continue;
+
+        // Count inliers
+        const inliers = [];
+        for (const idx of searchIndices) {
+            const p = points[idx];
+            const dist = Math.sqrt((p.x - circle.cx) ** 2 + (p.z - circle.cz) ** 2);
+            if (Math.abs(dist - circle.radius) < tolerance) {
+                inliers.push(idx);
+            }
+        }
+
+        if (inliers.length > bestInliers.length) {
+            bestInliers = inliers;
+            bestCircle = circle;
         }
     }
 
-    if (!bestFit) return null;
+    if (!bestCircle || bestInliers.length < 15) return null;
+
+    // 3. Final Refinement: Fit to all inliers
+    const inlierPoints = bestInliers.map(i => points[i]);
+    const refined = fitCircle(inlierPoints);
+    if (!refined) return null;
+
+    // Determine the span of the inliers for visualization
+    const startIdx = Math.min(...bestInliers);
+    const endIdx = Math.max(...bestInliers);
 
     return {
-        cx: bestFit.cx,
-        cz: bestFit.cz,
-        radius: bestFit.radius,
-        rms: bestFit.rms,
-        diameter: bestFit.radius * 2,
-        inlierStart: bestStart,
-        inlierEnd: bestEnd
+        cx: refined.cx,
+        cz: refined.cz,
+        radius: refined.radius,
+        rms: refined.rms,
+        diameter: refined.radius * 2,
+        inlierStart: startIdx,
+        inlierEnd: endIdx
     };
+}
+
+/**
+ * Geometric circle from 3 points
+ */
+function getCircleFrom3Points(p1, p2, p3) {
+    const x1 = p1.x, y1 = p1.z;
+    const x2 = p2.x, y2 = p2.z;
+    const x3 = p3.x, y3 = p3.z;
+
+    const b = x2 - x1, c = y2 - y1;
+    const d = x3 - x1, e = y3 - y1;
+    const f = (x2 * x2 - x1 * x1 + y2 * y2 - y1 * y1);
+    const g = (x3 * x3 - x1 * x1 + y3 * y3 - y1 * y1);
+    const det = 2 * (b * e - c * d);
+
+    if (Math.abs(det) < 1e-6) return null;
+
+    const cx = (e * f - c * g) / det;
+    const cz = (b * g - d * f) / det;
+    const radius = Math.sqrt((x1 - cx) ** 2 + (y1 - cz) ** 2);
+
+    return { cx, cz, radius };
 }

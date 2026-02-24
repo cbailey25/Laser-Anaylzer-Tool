@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Edges, Line, OrthographicCamera } from '@react-three/drei';
 import * as THREE from 'three';
 
@@ -137,13 +137,14 @@ function LaserPlane({ params }) {
 function CameraFOV({ params }) {
     if (!params) return null;
 
-    const { focalLength, pixelSize, imageWidth, imageHeight } = params;
-    const pxMm = (pixelSize || 11) / 1000;
-    const f = focalLength || 24;
+    const width = params.imageWidth || 2048;
+    const height = params.imageHeight || 1152;
+    const pxMm = (params.pixelSize || 11) / 1000;
+    const f = params.focalLength || 24;
     const far = 2000 * SCALE;
 
-    const hHalf = ((imageWidth || 2048) / 2 * pxMm) / f;
-    const vHalf = ((imageHeight || 1152) / 2 * pxMm) / f;
+    const hHalf = (width / 2 * pxMm) / f;
+    const vHalf = (height / 2 * pxMm) / f;
 
     const x = far * hHalf;
     const y = far * vHalf;
@@ -177,11 +178,47 @@ function CameraFOV({ params }) {
     );
 }
 
+/**
+ * CameraController — handles viewpoint switching.
+ */
+function CameraController({ mode, target }) {
+    const { camera, controls } = useThree();
+
+    useEffect(() => {
+        if (!controls || !mode) return;
+        const distance = 0.8;
+
+        switch (mode) {
+            case 'X':
+                camera.position.set(target.x + distance, target.y, target.z);
+                break;
+            case 'Y':
+                camera.position.set(target.x, target.y + distance, target.z);
+                break;
+            case 'Z':
+                camera.position.set(target.x, target.y, target.z - distance);
+                break;
+            case 'ISO':
+                camera.position.set(target.x + 0.6, target.y + 0.6, target.z + 0.6);
+                break;
+            default:
+                return;
+        }
+
+        controls.target.copy(target);
+        controls.update();
+    }, [mode, target, camera, controls]);
+
+    return null;
+}
+
 export default function Viewer3D({ points, pipeResult, params }) {
     // Persistent targets to prevent camera jumps on profile scrolling
     const [viewTarget3D, setViewTarget3D] = useState(new THREE.Vector3(0, 0, 0.15));
     const [viewTargetXZ, setViewTargetXZ] = useState(new THREE.Vector3(0, -0.15, 0));
     const [isInitialized, setIsInitialized] = useState(false);
+
+    const [viewMode, setViewMode] = useState('ISO');
 
     // Only update targets the first time data arrives (or after a reset)
     useEffect(() => {
@@ -203,10 +240,6 @@ export default function Viewer3D({ points, pipeResult, params }) {
         }
     }, [points, isInitialized]);
 
-    // Optional: Reset initialization when params (system settings) change if you want auto-refocus there.
-    // However, the user said "viewer should only be adjusted when the user adjusts the orbit controls".
-    // We will leave it initialized so it stays put after the first data arrival.
-
     const gridColor = '#334155';
     const gridFade = '#1e293b';
 
@@ -214,8 +247,22 @@ export default function Viewer3D({ points, pipeResult, params }) {
         <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', background: '#0a0e1a' }}>
             {/* 3D World View */}
             <div style={{ flex: 1, position: 'relative', borderBottom: '1px solid #1e293b' }}>
-                <div className="viewer-overlay"><div className="viewer-badge">3D World View</div></div>
+                <div className="viewer-overlay">
+                    <div className="viewer-badge">3D World View</div>
+                    <div className="viewer-toolbar">
+                        {['X', 'Y', 'Z', 'ISO'].map(m => (
+                            <button
+                                key={m}
+                                className={`view-btn ${viewMode === m ? 'active' : ''}`}
+                                onClick={() => setViewMode(m)}
+                            >
+                                {m}
+                            </button>
+                        ))}
+                    </div>
+                </div>
                 <Canvas camera={{ position: [0.6, 0.6, 0.6], fov: 45, near: 0.001, far: 100 }} gl={{ antialias: true }}>
+                    <CameraController mode={viewMode} target={viewTarget3D} />
                     <ambientLight intensity={0.7} />
                     <pointLight position={[1, 1, 1]} intensity={0.8} />
                     <LaserProfilePoints points={points} pipeResult={pipeResult} />
@@ -223,7 +270,12 @@ export default function Viewer3D({ points, pipeResult, params }) {
                     <LaserPlane params={params} />
                     <CameraFOV params={params} />
                     <axesHelper args={[0.5]} />
-                    <gridHelper key="grid-3d" args={[10, 100, gridColor, gridFade]} rotation={[Math.PI / 2, 0, 0]} />
+                    <gridHelper
+                        key="grid-3d"
+                        args={[10, 100, gridColor, gridFade]}
+                        rotation={[Math.PI / 2, 0, 0]}
+                        position={toScene(params.camX, params.camY, params.camZ + 2000)}
+                    />
                     {params && (
                         <>
                             <group position={toScene(params.camX, params.camY, params.camZ)} rotation={[-(params.camPitch || 0) * Math.PI / 180, (params.camYaw || 0) * Math.PI / 180, (params.camRoll || 0) * Math.PI / 180]}>

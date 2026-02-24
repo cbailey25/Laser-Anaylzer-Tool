@@ -1,5 +1,5 @@
 /* ===========================
-   Laser Feature Visualiser
+   Laser Analyzer
    Design System & Global Styles
    =========================== */
 
@@ -422,6 +422,41 @@ body {
   font-size: var(--font-size-xs);
   color: var(--text-secondary);
   pointer-events: auto;
+}
+
+.viewer-toolbar {
+  display: flex;
+  gap: 2px;
+  background: rgba(17, 24, 39, 0.8);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  pointer-events: auto;
+}
+
+.view-btn {
+  padding: 4px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.view-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.view-btn.active {
+  background: var(--accent-blue);
+  color: white;
 }
 
 .viewer-badge .dot {

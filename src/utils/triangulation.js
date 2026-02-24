@@ -13,11 +13,13 @@ import * as THREE from 'three';
  */
 
 export function triangulate2Dto3D(pixelColumns, pixelRows, params) {
-    const { focalLength, pixelSize, imageWidth, imageHeight } = params;
+    const focalLength = params.focalLength || 24;
+    const pixelSize = params.pixelSize || 11;
+    const width = params.imageWidth || 2048;
+    const height = params.imageHeight || 1152;
 
-    // Default image height if not specified, usually we know cy
-    const cx = imageWidth / 2;
-    const cy = (imageHeight || 1152) / 2;
+    const cx = width / 2;
+    const cy = height / 2;
     const pxMm = pixelSize / 1000;
 
     // 1. Build Camera Object in World Space
@@ -31,8 +33,6 @@ export function triangulate2Dto3D(pixelColumns, pixelRows, params) {
     const cameraQuat = new THREE.Quaternion().setFromEuler(camRot);
 
     // 2. Build Laser Plane in World Space
-    // Our laser mesh starts on XY plane pointing +Z. 
-    // It is rotated by Math.PI / 2 around X, meaning normal becomes -Y.
     const laserNormalLocal = new THREE.Vector3(0, -1, 0);
     const laserRot = new THREE.Euler(
         -(params.laserPitch || 0) * Math.PI / 180,
@@ -51,16 +51,11 @@ export function triangulate2Dto3D(pixelColumns, pixelRows, params) {
         const u = pixelColumns[i];
         const v = pixelRows[i];
 
-        // Ray direction in camera local space
-        // Standard pinhole: looking down +Z.
-        // If v increases downwards, local Y goes down.
         const dirX = (u - cx) * pxMm / focalLength;
         const dirY = (cy - v) * pxMm / focalLength;
         const dirZ = 1.0;
 
         const localDir = new THREE.Vector3(dirX, dirY, dirZ).normalize();
-
-        // Transform ray to world space
         const worldDir = localDir.clone().applyQuaternion(cameraQuat);
         const ray = new THREE.Ray(camPos, worldDir);
 

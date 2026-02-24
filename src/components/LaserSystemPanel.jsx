@@ -37,10 +37,8 @@ export default function LaserSystemPanel({ params, onChange }) {
     );
 
     const triangParams = [
-        { key: 'dlc', label: 'Camera–Laser Dist', unit: 'mm', step: 1 },
         { key: 'focalLength', label: 'Focal Length', unit: 'mm', step: 0.1 },
         { key: 'pixelSize', label: 'Pixel Size', unit: 'µm', step: 0.1 },
-        { key: 'imageWidth', label: 'Image Width', unit: 'px', step: 1 },
     ];
 
     const camParams = [
