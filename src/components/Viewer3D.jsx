@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, Edges, Line, OrthographicCamera } from '@react-three/drei';
+import { OrbitControls, Edges, Line, OrthographicCamera, Text } from '@react-three/drei';
 import * as THREE from 'three';
 
 const SCALE = 0.001;
@@ -55,7 +55,15 @@ function LaserProfilePoints({ points, pipeResult, useXZ = false }) {
             posArray[i * 3 + 2] = pos[2];
 
             const isPipe = pipeResult && i >= pipeResult.inlierStart && i <= pipeResult.inlierEnd;
-            const c = isPipe ? colorValid : colorSeabed;
+            const isAnode = pipeResult && pipeResult.anodeIndices && pipeResult.anodeIndices.includes(i);
+
+            let c = colorSeabed;
+            if (isAnode) {
+                c = new THREE.Color('#fb923c'); // Orange for Anodes
+            } else if (isPipe) {
+                c = colorValid;
+            }
+
             colorArray[i * 3] = c.r;
             colorArray[i * 3 + 1] = c.g;
             colorArray[i * 3 + 2] = c.b;
@@ -82,8 +90,9 @@ function LaserProfilePoints({ points, pipeResult, useXZ = false }) {
 function PipeVisualization({ pipeResult, points, useXZ = false }) {
     if (!pipeResult) return null;
 
-    const { cx, cz, radius, inlierStart, inlierEnd } = pipeResult;
+    const { cx, cz, radius, inlierStart, inlierEnd, diameter } = pipeResult;
     const sceneRadius = radius * SCALE;
+    const displayDiameter = diameter || (radius * 2);
 
     const inliers = points.slice(inlierStart, inlierEnd + 1);
     const validInliers = inliers.filter(p => Number.isFinite(p.y));
@@ -91,14 +100,87 @@ function PipeVisualization({ pipeResult, points, useXZ = false }) {
 
     const pos = useXZ ? toSceneXZ(cx, cy, cz) : toScene(cx, cy, cz);
 
+    // Calculate arc angles for the thick inlier highlight
+    const pStart = points[inlierStart];
+    const pEnd = points[inlierEnd];
+    const startAngle = Math.atan2(-(pStart.z - cz), pStart.x - cx);
+    const endAngle = Math.atan2(-(pEnd.z - cz), pEnd.x - cx);
+
+    let tStart = Math.min(startAngle, endAngle);
+    let tLen = Math.max(startAngle, endAngle) - tStart;
+
+    // Proportional scaling for UI elements
+    const labelScale = Math.max(0.4, Math.min(2.0, sceneRadius / 0.25)); // Normalized to 500mm pipe (0.25 radius)
+    const arrowSize = 0.006 * labelScale;
+    const fontSize = 0.013 * labelScale;
+    const textOffset = 0.004 * labelScale;
+    const dotSize = 0.0015 * labelScale;
+
     return (
         <group position={pos}>
+            {/* Full fit circle (thin, background) */}
             <mesh rotation={useXZ ? [0, 0, 0] : [Math.PI / 2, 0, 0]}>
-                <ringGeometry args={[sceneRadius - 0.0005, sceneRadius + 0.0005, 64]} />
-                <meshBasicMaterial color="#22c55e" transparent opacity={0.6} side={THREE.DoubleSide} />
+                <ringGeometry args={[sceneRadius - 0.0001, sceneRadius + 0.0001, 128]} />
+                <meshBasicMaterial color="#22c55e" transparent opacity={0.4} side={THREE.DoubleSide} />
             </mesh>
+
+            {/* Inlier arc (thick, bright green highlight) */}
+            <mesh rotation={useXZ ? [0, 0, 0] : [Math.PI / 2, 0, 0]}>
+                <ringGeometry args={[sceneRadius - (0.001 * labelScale), sceneRadius + (0.001 * labelScale), 80, 1, tStart, tLen]} />
+                <meshBasicMaterial color="#4ade80" side={THREE.DoubleSide} />
+            </mesh>
+
+            {/* Dimension Line (Horizontal) */}
+            <Line
+                points={[[-sceneRadius, 0, 0], [sceneRadius, 0, 0]]}
+                color="#ffffff"
+                lineWidth={1}
+                transparent
+                opacity={0.6}
+            />
+
+            {/* Left Arrow Head */}
+            <Line
+                points={[
+                    [-sceneRadius + arrowSize, arrowSize * 0.4, 0],
+                    [-sceneRadius, 0, 0],
+                    [-sceneRadius + arrowSize, -arrowSize * 0.4, 0]
+                ]}
+                color="#ffffff"
+                lineWidth={1 * labelScale}
+                transparent
+                opacity={0.8}
+            />
+
+            {/* Right Arrow Head */}
+            <Line
+                points={[
+                    [sceneRadius - arrowSize, arrowSize * 0.4, 0],
+                    [sceneRadius, 0, 0],
+                    [sceneRadius - arrowSize, -arrowSize * 0.4, 0]
+                ]}
+                color="#ffffff"
+                lineWidth={1 * labelScale}
+                transparent
+                opacity={0.8}
+            />
+
+            {/* Diameter Label */}
+            <Text
+                position={[0, textOffset, 0]}
+                fontSize={fontSize}
+                color="#ffffff"
+                anchorX="center"
+                anchorY="bottom"
+                outlineWidth={0.0015 * labelScale}
+                outlineColor="#0a0e1a"
+            >
+                {`${displayDiameter.toFixed(0)} mm`}
+            </Text>
+
+            {/* Center dot */}
             <mesh>
-                <sphereGeometry args={[0.003, 8, 8]} />
+                <sphereGeometry args={[dotSize, 8, 8]} />
                 <meshBasicMaterial color="#22c55e" />
             </mesh>
         </group>
@@ -120,11 +202,11 @@ function LaserPlane({ params }) {
             ]}
         >
             <mesh rotation={[Math.PI / 2, 0, 0]}>
-                <circleGeometry args={[2, 64, Math.PI / 2 - Math.PI / 6, Math.PI / 3]} />
+                <circleGeometry args={[6, 64, Math.PI / 2 - Math.PI / 6, Math.PI / 3]} />
                 <meshStandardMaterial color="#22c55e" transparent opacity={0.15} side={THREE.DoubleSide} depthWrite={false} />
             </mesh>
             <mesh rotation={[Math.PI / 2, 0, 0]}>
-                <circleGeometry args={[2, 64, Math.PI / 2 - Math.PI / 6, Math.PI / 3]} />
+                <circleGeometry args={[6, 64, Math.PI / 2 - Math.PI / 6, Math.PI / 3]} />
                 <meshBasicMaterial color="#22c55e" wireframe transparent opacity={0.1} />
             </mesh>
         </group>
@@ -141,7 +223,7 @@ function CameraFOV({ params }) {
     const height = params.imageHeight || 1152;
     const pxMm = (params.pixelSize || 11) / 1000;
     const f = params.focalLength || 24;
-    const far = 2000 * SCALE;
+    const far = 6000 * SCALE;
 
     const hHalf = (width / 2 * pxMm) / f;
     const vHalf = (height / 2 * pxMm) / f;
@@ -274,7 +356,7 @@ export default function Viewer3D({ points, pipeResult, params }) {
                         key="grid-3d"
                         args={[10, 100, gridColor, gridFade]}
                         rotation={[Math.PI / 2, 0, 0]}
-                        position={toScene(params.camX, params.camY, params.camZ + 2000)}
+                        position={toScene(params.camX, params.camY, params.camZ + 6000)}
                     />
                     {params && (
                         <>
@@ -313,7 +395,13 @@ export default function Viewer3D({ points, pipeResult, params }) {
                         position={[0, 0, -0.01]}
                     />
                     <OrbitControls target={viewTargetXZ} enableRotate={false} enablePan screenSpacePanning={true} />
+
                 </Canvas>
+                <div className="viewer-legend">
+                    <div className="legend-item"><span className="dot seabed"></span> Seabed</div>
+                    <div className="legend-item"><span className="dot pipe"></span> Pipeline</div>
+                    <div className="legend-item"><span className="dot anode"></span> Anode</div>
+                </div>
             </div>
         </div>
     );

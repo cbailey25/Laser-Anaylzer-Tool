@@ -57,6 +57,15 @@ export default function PipeDetectionPanel({ enabled, onToggle, diameter, onDiam
                         )}
                     </div>
 
+                    {result && result.anodeIndices && result.anodeIndices.length > 0 && (
+                        <div className="result-row">
+                            <span className="result-label">Anode Status</span>
+                            <span className="result-badge" style={{ background: 'rgba(251, 146, 60, 0.15)', color: '#fb923c' }}>
+                                ● Highlighted
+                            </span>
+                        </div>
+                    )}
+
                     {result && (
                         <>
                             <div className="result-row">

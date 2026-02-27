@@ -176,6 +176,39 @@ export function detectPipe(points, expectedDiameter, options = {}) {
     const startIdx = Math.min(...bestInliers);
     const endIdx = Math.max(...bestInliers);
 
+    // 4. Anode Detection: Identify points that protrude from the top of the pipe
+    const anodeIndices = [];
+    const anodeThreshold = 5; // mm deviation from circle surface
+    const anodeMaxHeight = refined.radius * 0.4; // max height above circle to consider it "attached"
+
+    for (let i = startIdx; i <= endIdx; i++) {
+        const p = points[i];
+        const dx = p.x - refined.cx;
+        const dz = p.z - refined.cz;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+
+        // Is it significantly "above" the circle surface? (Z is depth, so smaller Z is higher)
+        // We look for points that are outside the circle but still somewhat close to the top
+        const deviation = refined.radius - dist;
+
+        // Point is "above" the pipe if it's closer to the center than the radius (but actually, 
+        // anodes are on the OUTSIDE. If Z is depth, an anode on top has SHALOWER Z than the pipe surface.)
+        // Actually, if we are looking from above, the points we see are the TOP of the pipe.
+        // If there's an anode on top, the laser hits it FIRST, so Z will be smaller (shallower).
+        // Since we fit the circle to the "valid" pipe wall, an anode would be a PROTRUSION towards the camera.
+
+        const isHigher = p.z < (refined.cz - Math.sqrt(Math.max(0, refined.radius ** 2 - dx ** 2)));
+        const verticalGap = (refined.cz - Math.sqrt(Math.max(0, refined.radius ** 2 - dx ** 2))) - p.z;
+
+        // Condition:
+        // 1. Point is horizontally within the top section of the pipe
+        // 2. Point is shallower (smaller Z) than the fitted circle by more than 'anodeThreshold'
+        // 3. Point isn't so far away that it's unrelated noise (maxHeight)
+        if (Math.abs(dx) < refined.radius * 0.8 && verticalGap > anodeThreshold && verticalGap < anodeMaxHeight) {
+            anodeIndices.push(i);
+        }
+    }
+
     return {
         cx: refined.cx,
         cz: refined.cz,
@@ -183,7 +216,8 @@ export function detectPipe(points, expectedDiameter, options = {}) {
         rms: refined.rms,
         diameter: refined.radius * 2,
         inlierStart: startIdx,
-        inlierEnd: endIdx
+        inlierEnd: endIdx,
+        anodeIndices: anodeIndices
     };
 }
 

@@ -30,6 +30,12 @@ dist-ssr
 *.pdf
 out
 release
+dist_electron
+*.exe
+*.msi
+*.zip
+*.dmg
+electron-builder.log
 
 # Diagnostic and temporary scripts
 debugFileStructure.js

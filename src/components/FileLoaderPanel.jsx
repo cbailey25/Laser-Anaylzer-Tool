@@ -96,7 +96,7 @@ export default function FileLoaderPanel({
             {fileInfo && fileInfo.profileCount > 1 && (
                 <div className="form-group" style={{ marginTop: 'var(--space-md)' }}>
                     <label className="form-label">
-                        Profile
+                        Profile Selection
                         <span className="form-unit">{selectedProfile + 1} / {fileInfo.profileCount}</span>
                     </label>
                     <input
@@ -108,20 +108,43 @@ export default function FileLoaderPanel({
                         value={selectedProfile}
                         onChange={(e) => onProfileChange(parseInt(e.target.value))}
                     />
+                    <div className="step-button-group">
+                        <button
+                            className="step-btn"
+                            disabled={selectedProfile === 0}
+                            onClick={() => onProfileChange(selectedProfile - 1)}
+                        >
+                            ◀ Prev
+                        </button>
+                        <button
+                            className="step-btn"
+                            disabled={selectedProfile === fileInfo.profileCount - 1}
+                            onClick={() => onProfileChange(selectedProfile + 1)}
+                        >
+                            Next ▶
+                        </button>
+                    </div>
                 </div>
             )}
 
-            {/* Profile comment info */}
+            {/* Profile Metadata */}
             {fileInfo && fileInfo.currentComment && (
-                <div className="file-comment">
-                    {Object.entries(fileInfo.currentComment).slice(0, 6).map(([key, val]) => (
-                        <div className="result-row" key={key}>
-                            <span className="result-label">{key}</span>
-                            <span className="result-value" style={{ maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {typeof val === 'number' ? val.toFixed?.(2) ?? val : String(val)}
-                            </span>
-                        </div>
-                    ))}
+                <div className="results-section" style={{ marginTop: 'var(--space-md)', paddingTop: 'var(--space-md)', borderTop: '1px solid var(--border-subtle)' }}>
+                    <div className="result-row">
+                        <span className="result-label">Acquisition Timestamp</span>
+                    </div>
+                    <div style={{
+                        fontSize: '11px',
+                        fontFamily: 'monospace',
+                        color: 'var(--accent-orange)',
+                        background: 'rgba(245, 158, 11, 0.05)',
+                        padding: '8px',
+                        borderRadius: '4px',
+                        marginTop: '4px',
+                        border: '1px solid rgba(245, 158, 11, 0.1)'
+                    }}>
+                        {fileInfo.currentComment.acquisition?.time || 'N/A'}
+                    </div>
                 </div>
             )}
 
