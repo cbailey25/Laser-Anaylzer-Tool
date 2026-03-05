@@ -1,11 +1,14 @@
-import React, { useState, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { filterNoisePoints } from './utils/pointCleaning.js';
 import LaserSystemPanel from './components/LaserSystemPanel.jsx';
 import PipeDetectionPanel from './components/PipeDetectionPanel.jsx';
+import ObjectDetectionPanel from './components/ObjectDetectionPanel.jsx';
 import FileLoaderPanel from './components/FileLoaderPanel.jsx';
 import Viewer3D from './components/Viewer3D.jsx';
 import { generateDemoProfile, triangulate2Dto3D } from './utils/triangulation.js';
 import { parseBinFile, profileToPixelCoords } from './utils/binParser.js';
 import { detectPipe } from './utils/pipeFitting.js';
+import { detectFeatures } from './utils/featureDetection.js';
 
 const DEFAULT_PARAMS = {
     focalLength: 24,    // mm
@@ -27,6 +30,14 @@ export default function App() {
     const [pipeEnabled, setPipeEnabled] = useState(true);
     const [pipeDiameter, setPipeDiameter] = useState(DEFAULT_PIPE_DIAMETER);
 
+    // Feature Detection state
+    const [featuresEnabled, setFeaturesEnabled] = useState(false);
+    const [pointCleaningEnabled, setPointCleaningEnabled] = useState(false);
+    const [pointCleaningParams, setPointCleaningParams] = useState({ radius: 5, minNeighbors: 2 });
+    const [featureParams, setFeatureParams] = useState({ minHeight: 15, minWidth: 30 });
+    const [lastDetectionLog, setLastDetectionLog] = useState(null);
+    const loggedProfiles = useRef(new Set()); // profileIndex -> Set of feature types logged
+
     // File loading state
     const [binData, setBinData] = useState(null);       // parsed BinFileData
     const [fileName, setFileName] = useState(null);
@@ -40,6 +51,7 @@ export default function App() {
             setBinData(data);
             setFileName(name);
             setSelectedProfile(0);
+            loggedProfiles.current.clear();
 
             // imageWidth is redundant, we use it only if needed by low-level utils
             setParams(prev => ({
@@ -56,6 +68,7 @@ export default function App() {
         setFileName(null);
         setSelectedProfile(0);
         lastPipeResult.current = null;
+        loggedProfiles.current.clear();
     }, []);
 
     // File info for the panel
@@ -71,47 +84,208 @@ export default function App() {
     }, [binData, fileName, selectedProfile]);
 
     // Compute 3D profile: from loaded file OR demo data
-    const { profile3D, pipeResult, derivedParams } = useMemo(() => {
+    const { profile3D, pipeResult, featuresResult, derivedParams } = useMemo(() => {
         try {
             let points;
-            // Provide theta explicitly for triangulation from the difference, 
-            // but the user mentions we should just keep theta independent if they want.
-            // Actually, we'll keep `theta` derived from the pitch for triangulation to work out of box,
-            // or we use the `laserPitch` itself:
             const currentTheta = Math.abs(params.laserPitch - params.camPitch);
             const derived = { ...params, theta: currentTheta || 30 };
 
             if (binData && binData.profiles.length > 0) {
-                // ---- File mode: triangulate loaded profile ----
                 const profile = binData.profiles[selectedProfile];
-                if (!profile) return { profile3D: [], pipeResult: null, derivedParams: derived };
+                if (!profile) return { profile3D: [], pipeResult: null, featuresResult: [], derivedParams: derived };
 
                 const { pixelColumns, pixelRows } = profileToPixelCoords(profile);
-                if (pixelColumns.length < 3) return { profile3D: [], pipeResult: null, derivedParams: derived };
+                if (pixelColumns.length < 3) return { profile3D: [], pipeResult: null, featuresResult: [], derivedParams: derived };
 
                 points = triangulate2Dto3D(pixelColumns, pixelRows, derived);
             } else {
-                // ---- Demo mode: generate synthetic profile ----
                 const demo = generateDemoProfile(derived, pipeDiameter);
                 points = demo.points;
             }
 
-            // Detect pipe if enabled
+            // Apply point cleaning if enabled (runs before any detection)
+            const processedPoints = pointCleaningEnabled
+                ? filterNoisePoints(points, pointCleaningParams.radius, pointCleaningParams.minNeighbors)
+                : points;
+
+            // Detect pipe if enabled (run on cleaned points)
             let pipe = null;
-            if (pipeEnabled && points.length > 10) {
-                pipe = detectPipe(points, pipeDiameter, { prevResult: lastPipeResult.current });
+            if (pipeEnabled && processedPoints.length > 10) {
+                pipe = detectPipe(processedPoints, pipeDiameter, { prevResult: lastPipeResult.current });
                 if (pipe) {
                     lastPipeResult.current = pipe;
                 }
             }
 
-            return { profile3D: points, pipeResult: pipe, derivedParams: derived };
+            // Detect features if enabled (run on cleaned points)
+            let features = [];
+            if (featuresEnabled && processedPoints.length > 10) {
+                features = detectFeatures(processedPoints, { ...featureParams, pipeResult: pipe });
+            }
+
+            return { profile3D: processedPoints, pipeResult: pipe, featuresResult: features, derivedParams: derived };
         } catch (e) {
             console.warn('Computation error:', e);
             const currentTheta = Math.abs(params.camPitch - params.laserPitch);
-            return { profile3D: [], pipeResult: null, derivedParams: { ...params, theta: currentTheta } };
+            return { profile3D: [], pipeResult: null, featuresResult: [], derivedParams: { ...params, theta: currentTheta } };
         }
-    }, [params, pipeEnabled, pipeDiameter, binData, selectedProfile]);
+    }, [params, pipeEnabled, pipeDiameter, pointCleaningEnabled, pointCleaningParams, featuresEnabled, featureParams, binData, selectedProfile]);
+
+    // ---- Logging Effect ----
+    useEffect(() => {
+        if (!featuresEnabled || featuresResult.length === 0 || !binData) return;
+
+        const profileIdx = selectedProfile;
+        const currentProfile = binData.profiles[profileIdx];
+        const timestamp = currentProfile.comment?.timestamp || `Line-${profileIdx}`;
+
+        // Log each feature found if not already logged for this profile
+        featuresResult.forEach(feature => {
+            const logKey = `${profileIdx}-${feature.type}-${feature.xMin.toFixed(0)}`;
+            if (!loggedProfiles.current.has(logKey)) {
+                loggedProfiles.current.add(logKey);
+
+                const logContent = `[EVENT] Type: ${feature.type} | Timestamp: ${timestamp} | Confidence: ${feature.confidence} | Bounds: [${feature.xMin.toFixed(1)}, ${feature.xMax.toFixed(1)}] @ [${feature.zMin.toFixed(1)}, ${feature.zMax.toFixed(1)}]`;
+
+                // Invoke electron API
+                if (window.electronAPI) {
+                    window.electronAPI.appendLog({
+                        filePath: 'detections_log.txt',
+                        content: logContent
+                    }).then(res => {
+                        if (res.success) {
+                            setLastDetectionLog(new Date().toLocaleTimeString());
+                        }
+                    });
+                } else {
+                    console.log('Log entry (browser mode):', logContent);
+                    setLastDetectionLog(new Date().toLocaleTimeString());
+                }
+            }
+        });
+    }, [featuresEnabled, featuresResult, selectedProfile, binData]);
+
+    const handleLabelFeature = useCallback((feature, isCorrect) => {
+        if (!window.electronAPI) return;
+
+        const currentProfile = binData.profiles[selectedProfile];
+        const labelData = {
+            profileIndex: selectedProfile,
+            timestamp: currentProfile.comment?.timestamp,
+            feature: { ...feature, indices: undefined }, // Don't save indices to keep JSON small
+            isCorrect: isCorrect,
+            paramsUsed: featureParams,
+            labeledAt: new Date().toISOString()
+        };
+
+        window.electronAPI.appendLog({
+            filePath: 'training_data.json',
+            content: JSON.stringify(labelData)
+        }).then(res => {
+            if (res.success) {
+                alert(isCorrect ? 'Marked as Correct. Data saved for training.' : 'Marked as False Positive. Logic will ignore similar features in future datasets.');
+            }
+        });
+    }, [selectedProfile, binData, featureParams]);
+
+    // ---- ML PNG Export Effect ----
+    useEffect(() => {
+        window.onTriggerExportPNGs = async () => {
+            if (!binData || !window.electronAPI) {
+                alert("Cannot export: No file loaded or Electron API missing.");
+                return;
+            }
+
+            const confirm = window.confirm(`This will play through ${binData.profileCount} profiles and export a 2048x1152 PNG for each into a "ml_dataset" folder. This may take a few moments. Proceed?`);
+            if (!confirm) return;
+
+            // Store original states
+            const originalProfile = selectedProfile;
+            const originalPipeEnabled = pipeEnabled;
+            const originalFeaturesEnabled = featuresEnabled;
+
+            // Disable overlays for pure data capture
+            setPipeEnabled(false);
+            setFeaturesEnabled(false);
+
+            alert("Export started. Please wait...");
+
+            // Select the precise X-Z Canvas from the DOM and force it to 2048x1152
+            const canvases = document.querySelectorAll('canvas');
+            let targetCanvas = canvases[canvases.length - 1]; // X-Z Canvas
+            let container = targetCanvas ? targetCanvas.parentElement : null;
+            let origStyles = {};
+
+            if (container) {
+                origStyles = {
+                    position: container.style.position,
+                    width: container.style.width,
+                    height: container.style.height,
+                    zIndex: container.style.zIndex,
+                    top: container.style.top,
+                    left: container.style.left
+                };
+
+                // Force full resolution rendering
+                container.style.position = 'fixed';
+                container.style.top = '0px';
+                container.style.left = '0px';
+                container.style.width = '2048px';
+                container.style.height = '1152px';
+                container.style.zIndex = '9999';
+                window.dispatchEvent(new Event('resize'));
+                await new Promise(resolve => setTimeout(resolve, 300)); // wait for layout & WebGL buffers to reset
+            }
+
+            for (let i = 0; i < binData.profileCount; i++) {
+                // Yield to React to render the canvas
+                setSelectedProfile(i);
+                await new Promise(resolve => setTimeout(resolve, 60)); // Allow render to complete
+
+                if (!targetCanvas) continue;
+
+                try {
+                    const base64Data = targetCanvas.toDataURL('image/png');
+                    const profile = binData.profiles[i];
+
+                    // Windows filename restrictions: Cannot use ":" in paths.
+                    // Replace colons with dashes, keep everything else exactly as acquisition 
+                    let timestampStr = profile?.comment?.acquisition?.time?.replace(/:/g, '-') || `profile_${i.toString().padStart(4, '0')}`;
+                    const filename = `${timestampStr}.png`;
+
+                    await window.electronAPI.saveImageSequence({
+                        folderPath: 'ml_dataset',
+                        filename: filename,
+                        base64Data: base64Data
+                    });
+                } catch (err) {
+                    console.error("Failed to export profile:", i, err);
+                }
+            }
+
+            // Restore original DOM state
+            if (container) {
+                container.style.position = origStyles.position;
+                container.style.top = origStyles.top;
+                container.style.left = origStyles.left;
+                container.style.width = origStyles.width;
+                container.style.height = origStyles.height;
+                container.style.zIndex = origStyles.zIndex;
+                window.dispatchEvent(new Event('resize'));
+            }
+
+            // Restore original visualizer states
+            setPipeEnabled(originalPipeEnabled);
+            setFeaturesEnabled(originalFeaturesEnabled);
+            setSelectedProfile(originalProfile);
+
+            alert(`Export complete! Saved ${binData.profileCount} images (2048x1152) to 'ml_dataset' folder.`);
+        };
+
+        return () => {
+            delete window.onTriggerExportPNGs;
+        };
+    }, [binData, selectedProfile, pipeEnabled, featuresEnabled]);
 
     const handleParamsChange = useCallback((newParams) => {
         setParams(newParams);
@@ -142,6 +316,20 @@ export default function App() {
                 {/* Laser system configuration */}
                 <LaserSystemPanel params={params} onChange={handleParamsChange} />
 
+                {/* Object detection */}
+                <ObjectDetectionPanel
+                    enabled={featuresEnabled}
+                    onToggle={setFeaturesEnabled}
+                    pointCleaningEnabled={pointCleaningEnabled}
+                    onPointCleaningToggle={setPointCleaningEnabled}
+                    pointCleaningParams={pointCleaningParams}
+                    onPointCleaningParamsChange={setPointCleaningParams}
+                    detectedFeatures={featuresResult}
+                    lastLogTime={lastDetectionLog}
+                    params={featureParams}
+                    onParamsChange={setFeatureParams}
+                    onLabelFeature={handleLabelFeature}
+                />
 
                 {/* Pipe detection */}
                 <PipeDetectionPanel
@@ -165,13 +353,13 @@ export default function App() {
                         }
                     </p>
                     <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)', marginTop: 'var(--space-sm)' }}>
-                        v1.0.0 · Laser Analyzer
+                        v1.1.0 · Laser Analyzer
                     </p>
                 </div>
             </div>
 
             <div style={{ flex: 1, display: 'flex', minWidth: 0 }}>
-                <Viewer3D points={profile3D} pipeResult={pipeResult} params={derivedParams} />
+                <Viewer3D points={profile3D} pipeResult={pipeResult} features={featuresResult} params={derivedParams} />
             </div>
         </div>
     );

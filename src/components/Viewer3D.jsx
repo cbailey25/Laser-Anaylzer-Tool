@@ -32,7 +32,7 @@ const toSceneXZ = (x, y, z) => [
 /**
  * LaserProfilePoints — renders 3D points efficiently using THREE.Points.
  */
-function LaserProfilePoints({ points, pipeResult, useXZ = false }) {
+function LaserProfilePoints({ points, pipeResult, features = [], useXZ = false }) {
     const toPos = useXZ ? toSceneXZ : toScene;
 
     const geometry = useMemo(() => {
@@ -43,8 +43,16 @@ function LaserProfilePoints({ points, pipeResult, useXZ = false }) {
         const posArray = new Float32Array(points.length * 3);
         const colorArray = new Float32Array(points.length * 3);
 
-        const colorValid = new THREE.Color('#22c55e');
         const colorSeabed = new THREE.Color('#3b82f6');
+        const colorPipe = new THREE.Color('#22c55e');
+        const colorAnode = new THREE.Color('#fb923c');
+        const colorRock = new THREE.Color('#ef4444');
+
+        // Map feature indices for fast lookup
+        const featureMap = new Map();
+        features.forEach(f => {
+            f.indices.forEach(idx => featureMap.set(idx, f.type));
+        });
 
         for (let i = 0; i < points.length; i++) {
             const p = points[i];
@@ -55,14 +63,12 @@ function LaserProfilePoints({ points, pipeResult, useXZ = false }) {
             posArray[i * 3 + 2] = pos[2];
 
             const isPipe = pipeResult && i >= pipeResult.inlierStart && i <= pipeResult.inlierEnd;
-            const isAnode = pipeResult && pipeResult.anodeIndices && pipeResult.anodeIndices.includes(i);
+            const fType = featureMap.get(i);
 
             let c = colorSeabed;
-            if (isAnode) {
-                c = new THREE.Color('#fb923c'); // Orange for Anodes
-            } else if (isPipe) {
-                c = colorValid;
-            }
+            if (fType === 'Anode') c = colorAnode;
+            else if (fType === 'Rock') c = colorRock;
+            else if (isPipe) c = colorPipe;
 
             colorArray[i * 3] = c.r;
             colorArray[i * 3 + 1] = c.g;
@@ -73,7 +79,7 @@ function LaserProfilePoints({ points, pipeResult, useXZ = false }) {
         geo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
         geo.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
         return geo;
-    }, [points, pipeResult, useXZ]);
+    }, [points, pipeResult, features, useXZ]);
 
     if (!points || points.length === 0) return null;
 
@@ -214,6 +220,64 @@ function LaserPlane({ params }) {
 }
 
 /**
+ * FeatureVisualization — renders bounding boxes around detected objects.
+ */
+function FeatureVisualization({ features, useXZ = false }) {
+    if (!features || features.length === 0) return null;
+
+    const colors = {
+        'Anode': '#fb923c',    // Orange
+        'Rock': '#ef4444',     // Red
+        'Freespan': '#06b6d4', // Cyan
+        'default': '#fbbf24'   // Amber
+    };
+
+    return (
+        <group>
+            {features.map((f, i) => {
+                const width = f.xMax - f.xMin;
+                const height = f.zMax - f.zMin;
+                const cx = (f.xMin + f.xMax) / 2;
+                const cz = (f.zMin + f.zMax) / 2;
+
+                const pos = useXZ ? toSceneXZ(cx, 0, cz) : toScene(cx, 0, cz);
+                const sWidth = width * SCALE;
+                const sHeight = height * SCALE;
+                const color = colors[f.type] || colors.default;
+
+                return (
+                    <group key={i} position={pos}>
+                        {/* Bounding Box */}
+                        <Line
+                            points={[
+                                [-sWidth / 2, -sHeight / 2, 0],
+                                [sWidth / 2, -sHeight / 2, 0],
+                                [sWidth / 2, sHeight / 2, 0],
+                                [-sWidth / 2, sHeight / 2, 0],
+                                [-sWidth / 2, -sHeight / 2, 0],
+                            ]}
+                            color={color}
+                            lineWidth={2}
+                        />
+
+                        {/* Label */}
+                        <Text
+                            position={[0, sHeight / 2 + 0.005, 0]}
+                            fontSize={0.012}
+                            color={color}
+                            anchorX="center"
+                            anchorY="bottom"
+                        >
+                            {`${f.type} (${(f.confidence * 100).toFixed(0)}%)`}
+                        </Text>
+                    </group>
+                );
+            })}
+        </group>
+    );
+}
+
+/**
  * CameraFOV — visualises the camera's FOV.
  */
 function CameraFOV({ params }) {
@@ -294,7 +358,7 @@ function CameraController({ mode, target }) {
     return null;
 }
 
-export default function Viewer3D({ points, pipeResult, params }) {
+export default function Viewer3D({ points, pipeResult, features = [], params }) {
     // Persistent targets to prevent camera jumps on profile scrolling
     const [viewTarget3D, setViewTarget3D] = useState(new THREE.Vector3(0, 0, 0.15));
     const [viewTargetXZ, setViewTargetXZ] = useState(new THREE.Vector3(0, -0.15, 0));
@@ -347,7 +411,7 @@ export default function Viewer3D({ points, pipeResult, params }) {
                     <CameraController mode={viewMode} target={viewTarget3D} />
                     <ambientLight intensity={0.7} />
                     <pointLight position={[1, 1, 1]} intensity={0.8} />
-                    <LaserProfilePoints points={points} pipeResult={pipeResult} />
+                    <LaserProfilePoints points={points} pipeResult={pipeResult} features={features} />
                     <PipeVisualization points={points} pipeResult={pipeResult} />
                     <LaserPlane params={params} />
                     <CameraFOV params={params} />
@@ -375,7 +439,7 @@ export default function Viewer3D({ points, pipeResult, params }) {
             {/* X-Z Profile View */}
             <div style={{ flex: 1, position: 'relative' }}>
                 <div className="viewer-overlay"><div className="viewer-badge">X-Z Cross Section (Profile View)</div></div>
-                <Canvas gl={{ antialias: true }}>
+                <Canvas gl={{ antialias: true, preserveDrawingBuffer: true }}>
                     <OrthographicCamera
                         makeDefault
                         position={[viewTargetXZ.x, viewTargetXZ.y, 10]}
@@ -385,8 +449,9 @@ export default function Viewer3D({ points, pipeResult, params }) {
                         up={[0, 1, 0]}
                     />
                     <ambientLight intensity={1} />
-                    <LaserProfilePoints points={points} pipeResult={pipeResult} useXZ />
+                    <LaserProfilePoints points={points} pipeResult={pipeResult} features={features} useXZ />
                     <PipeVisualization points={points} pipeResult={pipeResult} useXZ />
+                    <FeatureVisualization features={features} useXZ />
                     <axesHelper args={[0.2]} />
                     <gridHelper
                         key="grid-xz"
@@ -401,6 +466,7 @@ export default function Viewer3D({ points, pipeResult, params }) {
                     <div className="legend-item"><span className="dot seabed"></span> Seabed</div>
                     <div className="legend-item"><span className="dot pipe"></span> Pipeline</div>
                     <div className="legend-item"><span className="dot anode"></span> Anode</div>
+                    <div className="legend-item"><span className="dot feature"></span> Feature</div>
                 </div>
             </div>
         </div>

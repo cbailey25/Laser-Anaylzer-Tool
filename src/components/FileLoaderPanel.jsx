@@ -147,6 +147,23 @@ export default function FileLoaderPanel({
                     </div>
                 </div>
             )}
+            {/* Export To PNG Sequence for ML dataset gathering */}
+            {fileInfo && fileInfo.profileCount > 1 && (
+                <div style={{ marginTop: 'var(--space-md)' }}>
+                    <button className="primary-btn" onClick={() => {
+                        if (window.onTriggerExportPNGs) {
+                            window.onTriggerExportPNGs();
+                        } else {
+                            alert("PNG sequence export is not registered. (Wait for UI to load)");
+                        }
+                    }} style={{ width: '100%', marginBottom: 'var(--space-sm)' }}>
+                        ⬇ Export PNG Sequence
+                    </button>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                        Creates {fileInfo.profileCount} images (2048x1152) of raw cross-sections
+                    </div>
+                </div>
+            )}
 
             {/* Clear button */}
             {fileInfo && (

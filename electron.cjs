@@ -1,5 +1,6 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const isDev = !app.isPackaged;
 
 function createWindow() {
@@ -23,6 +24,37 @@ function createWindow() {
     }
 }
 
+// IPC Handlers
+ipcMain.handle('append-log', async (event, { filePath, content }) => {
+    try {
+        fs.appendFileSync(filePath, content + '\n');
+        return { success: true };
+    } catch (error) {
+        console.error('Failed to append to log:', error);
+        return { success: false, error: error.message };
+    }
+});
+
+// IPC handler for saving PNG images for training data
+ipcMain.handle('save-image-seq', async (event, { folderPath, filename, base64Data }) => {
+    try {
+        const fullFolder = path.join(__dirname, folderPath);
+        if (!fs.existsSync(fullFolder)) {
+            fs.mkdirSync(fullFolder, { recursive: true });
+        }
+
+        const filePath = path.join(fullFolder, filename);
+        // Remove header from base64 string
+        const base64Image = base64Data.split(';base64,').pop();
+
+        fs.writeFileSync(filePath, base64Image, { encoding: 'base64' });
+        return { success: true, filePath };
+    } catch (error) {
+        console.error('Failed to save image:', error);
+        return { success: false, error: error.message };
+    }
+});
+
 app.whenReady().then(() => {
     createWindow();
 
@@ -34,3 +66,4 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
 });
+

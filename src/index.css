@@ -685,6 +685,31 @@ body {
   border-color: rgba(239, 68, 68, 0.35);
 }
 
+/* ---- Primary Button ---- */
+.primary-btn {
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--accent-blue);
+  border: 1px solid var(--accent-blue);
+  border-radius: var(--radius-sm);
+  color: white;
+  font-family: var(--font-family);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.primary-btn:hover {
+  background: #2563eb;
+  border-color: #2563eb;
+  transform: translateY(-1px);
+}
+
+.primary-btn:active {
+  transform: translateY(1px);
+}
+
 /* ---- Viewer Legend ---- */
 .viewer-legend {
   position: absolute;
@@ -733,6 +758,11 @@ body {
 .dot.anode {
   background: #fb923c;
   box-shadow: 0 0 8px rgba(251, 146, 60, 0.4);
+}
+
+.dot.feature {
+  background: #fbbf24;
+  box-shadow: 0 0 8px rgba(251, 191, 36, 0.4);
 }
 
 /* ---- Profile Step Buttons ---- */
