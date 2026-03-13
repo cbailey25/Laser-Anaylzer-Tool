@@ -16,7 +16,8 @@ export default function ObjectDetectionPanel({
     logFile = 'detections_log.txt',
     params,
     onParamsChange,
-    onLabelFeature
+    onLabelFeature,
+    onHoverFeature
 }) {
     return (
         <div className="panel">
@@ -129,10 +130,32 @@ export default function ObjectDetectionPanel({
                         <div style={{ marginTop: 'var(--space-sm)' }}>
                             <div className="form-label" style={{ marginBottom: 'var(--space-xs)' }}>Found Features (Help Train):</div>
                             {detectedFeatures.map((f, i) => (
-                                <div key={i} style={{ background: 'rgba(255,255,255,0.03)', padding: '8px', borderRadius: 'var(--radius-sm)', marginBottom: '8px' }}>
-                                    <div className="result-row" style={{ fontSize: '11px' }}>
+                                <div
+                                    key={i}
+                                    style={{
+                                        background: 'rgba(255,255,255,0.03)',
+                                        padding: '8px',
+                                        borderRadius: 'var(--radius-sm)',
+                                        marginBottom: '8px',
+                                        border: '1px solid transparent',
+                                        transition: 'all 0.2s ease'
+                                    }}
+                                    onMouseEnter={() => onHoverFeature && onHoverFeature(f)}
+                                    onMouseLeave={() => onHoverFeature && onHoverFeature(null)}
+                                    className="feature-card-hover"
+                                >
+                                    <div className="result-row" style={{ fontSize: '11px', flexWrap: 'wrap', gap: '4px' }}>
                                         <span style={{ color: '#fbbf24', fontWeight: 'bold' }}>{f.type}</span>
                                         <span style={{ color: 'var(--text-muted)' }}>{(f.confidence * 100).toFixed(0)}% conf</span>
+                                        {f.mlDetails && (
+                                            <span
+                                                className={`result-badge ${f.mlConfirmed ? 'detected' : 'warning'}`}
+                                                style={{ fontSize: '8px', padding: '1px 4px', lineBreak: 'anywhere' }}
+                                                title={f.mlDetails}
+                                            >
+                                                {f.mlConfirmed ? '✓ AI Verified' : '⚠ AI Disagree'}
+                                            </span>
+                                        )}
                                     </div>
                                     <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
                                         <button

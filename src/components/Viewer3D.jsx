@@ -32,7 +32,7 @@ const toSceneXZ = (x, y, z) => [
 /**
  * LaserProfilePoints — renders 3D points efficiently using THREE.Points.
  */
-function LaserProfilePoints({ points, pipeResult, features = [], useXZ = false }) {
+function LaserProfilePoints({ points, pipeResult, features = [], highlightedFeature = null, useXZ = false }) {
     const toPos = useXZ ? toSceneXZ : toScene;
 
     const geometry = useMemo(() => {
@@ -47,12 +47,16 @@ function LaserProfilePoints({ points, pipeResult, features = [], useXZ = false }
         const colorPipe = new THREE.Color('#22c55e');
         const colorAnode = new THREE.Color('#fb923c');
         const colorRock = new THREE.Color('#ef4444');
+        const colorHighlight = new THREE.Color('#ffffff'); // White highlight
 
         // Map feature indices for fast lookup
         const featureMap = new Map();
         features.forEach(f => {
             f.indices.forEach(idx => featureMap.set(idx, f.type));
         });
+
+        // Map highlighted indices
+        const spotlightSet = new Set(highlightedFeature?.indices || []);
 
         for (let i = 0; i < points.length; i++) {
             const p = points[i];
@@ -64,9 +68,11 @@ function LaserProfilePoints({ points, pipeResult, features = [], useXZ = false }
 
             const isPipe = pipeResult && i >= pipeResult.inlierStart && i <= pipeResult.inlierEnd;
             const fType = featureMap.get(i);
+            const isHighlighted = spotlightSet.has(i);
 
             let c = colorSeabed;
-            if (fType === 'Anode') c = colorAnode;
+            if (isHighlighted) c = colorHighlight;
+            else if (fType === 'Anode') c = colorAnode;
             else if (fType === 'Rock') c = colorRock;
             else if (isPipe) c = colorPipe;
 
@@ -79,7 +85,7 @@ function LaserProfilePoints({ points, pipeResult, features = [], useXZ = false }
         geo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
         geo.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
         return geo;
-    }, [points, pipeResult, features, useXZ]);
+    }, [points, pipeResult, features, highlightedFeature, useXZ]);
 
     if (!points || points.length === 0) return null;
 
@@ -222,7 +228,7 @@ function LaserPlane({ params }) {
 /**
  * FeatureVisualization — renders bounding boxes around detected objects.
  */
-function FeatureVisualization({ features, useXZ = false }) {
+function FeatureVisualization({ features, highlightedFeature = null, useXZ = false }) {
     if (!features || features.length === 0) return null;
 
     const colors = {
@@ -235,6 +241,10 @@ function FeatureVisualization({ features, useXZ = false }) {
     return (
         <group>
             {features.map((f, i) => {
+                const isHighlighted = highlightedFeature &&
+                    f.xMin === highlightedFeature.xMin &&
+                    f.zMin === highlightedFeature.zMin;
+
                 const width = f.xMax - f.xMin;
                 const height = f.zMax - f.zMin;
                 const cx = (f.xMin + f.xMax) / 2;
@@ -243,7 +253,7 @@ function FeatureVisualization({ features, useXZ = false }) {
                 const pos = useXZ ? toSceneXZ(cx, 0, cz) : toScene(cx, 0, cz);
                 const sWidth = width * SCALE;
                 const sHeight = height * SCALE;
-                const color = colors[f.type] || colors.default;
+                const color = isHighlighted ? '#ffffff' : (colors[f.type] || colors.default);
 
                 return (
                     <group key={i} position={pos}>
@@ -257,13 +267,29 @@ function FeatureVisualization({ features, useXZ = false }) {
                                 [-sWidth / 2, -sHeight / 2, 0],
                             ]}
                             color={color}
-                            lineWidth={2}
+                            lineWidth={isHighlighted ? 4 : 2}
                         />
+
+                        {isHighlighted && (
+                            <Line
+                                points={[
+                                    [-sWidth / 2 - 0.002, -sHeight / 2 - 0.002, 0],
+                                    [sWidth / 2 + 0.002, -sHeight / 2 - 0.002, 0],
+                                    [sWidth / 2 + 0.002, sHeight / 2 + 0.002, 0],
+                                    [-sWidth / 2 - 0.002, sHeight / 2 + 0.002, 0],
+                                    [-sWidth / 2 - 0.002, -sHeight / 2 - 0.002, 0],
+                                ]}
+                                color={color}
+                                lineWidth={1}
+                                transparent
+                                opacity={0.5}
+                            />
+                        )}
 
                         {/* Label */}
                         <Text
                             position={[0, sHeight / 2 + 0.005, 0]}
-                            fontSize={0.012}
+                            fontSize={isHighlighted ? 0.015 : 0.012}
                             color={color}
                             anchorX="center"
                             anchorY="bottom"
@@ -358,7 +384,7 @@ function CameraController({ mode, target }) {
     return null;
 }
 
-export default function Viewer3D({ points, pipeResult, features = [], params }) {
+export default function Viewer3D({ points, pipeResult, features = [], params, highlightedFeature = null }) {
     // Persistent targets to prevent camera jumps on profile scrolling
     const [viewTarget3D, setViewTarget3D] = useState(new THREE.Vector3(0, 0, 0.15));
     const [viewTargetXZ, setViewTargetXZ] = useState(new THREE.Vector3(0, -0.15, 0));
@@ -411,7 +437,12 @@ export default function Viewer3D({ points, pipeResult, features = [], params }) 
                     <CameraController mode={viewMode} target={viewTarget3D} />
                     <ambientLight intensity={0.7} />
                     <pointLight position={[1, 1, 1]} intensity={0.8} />
-                    <LaserProfilePoints points={points} pipeResult={pipeResult} features={features} />
+                    <LaserProfilePoints
+                        points={points}
+                        pipeResult={pipeResult}
+                        features={features}
+                        highlightedFeature={highlightedFeature}
+                    />
                     <PipeVisualization points={points} pipeResult={pipeResult} />
                     <LaserPlane params={params} />
                     <CameraFOV params={params} />
@@ -449,9 +480,19 @@ export default function Viewer3D({ points, pipeResult, features = [], params }) 
                         up={[0, 1, 0]}
                     />
                     <ambientLight intensity={1} />
-                    <LaserProfilePoints points={points} pipeResult={pipeResult} features={features} useXZ />
+                    <LaserProfilePoints
+                        points={points}
+                        pipeResult={pipeResult}
+                        features={features}
+                        highlightedFeature={highlightedFeature}
+                        useXZ
+                    />
                     <PipeVisualization points={points} pipeResult={pipeResult} useXZ />
-                    <FeatureVisualization features={features} useXZ />
+                    <FeatureVisualization
+                        features={features}
+                        highlightedFeature={highlightedFeature}
+                        useXZ
+                    />
                     <axesHelper args={[0.2]} />
                     <gridHelper
                         key="grid-xz"

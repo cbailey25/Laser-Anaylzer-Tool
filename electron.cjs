@@ -27,8 +27,16 @@ function createWindow() {
 // IPC Handlers
 ipcMain.handle('append-log', async (event, { filePath, content }) => {
     try {
-        fs.appendFileSync(filePath, content + '\n');
-        return { success: true };
+        const documentsPath = app.getPath('documents');
+        const logsFolder = path.join(documentsPath, 'Laser Analyzer Data', 'logs');
+
+        if (!fs.existsSync(logsFolder)) {
+            fs.mkdirSync(logsFolder, { recursive: true });
+        }
+
+        const fullPath = path.join(logsFolder, filePath);
+        fs.appendFileSync(fullPath, content + '\n');
+        return { success: true, savedPath: fullPath };
     } catch (error) {
         console.error('Failed to append to log:', error);
         return { success: false, error: error.message };
@@ -38,7 +46,11 @@ ipcMain.handle('append-log', async (event, { filePath, content }) => {
 // IPC handler for saving PNG images for training data
 ipcMain.handle('save-image-seq', async (event, { folderPath, filename, base64Data }) => {
     try {
-        const fullFolder = path.join(__dirname, folderPath);
+        // Use the user's Documents folder instead of the app directory
+        const documentsPath = app.getPath('documents');
+        const rootLogFolder = path.join(documentsPath, 'Laser Analyzer Data');
+        const fullFolder = path.join(rootLogFolder, folderPath);
+
         if (!fs.existsSync(fullFolder)) {
             fs.mkdirSync(fullFolder, { recursive: true });
         }

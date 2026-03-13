@@ -42,6 +42,7 @@ export default function App() {
     const [binData, setBinData] = useState(null);       // parsed BinFileData
     const [fileName, setFileName] = useState(null);
     const [selectedProfile, setSelectedProfile] = useState(0);
+    const [hoveredFeature, setHoveredFeature] = useState(null);
     const lastPipeResult = useRef(null);
 
     // Handle file loaded
@@ -84,7 +85,30 @@ export default function App() {
     }, [binData, fileName, selectedProfile]);
 
     // Compute 3D profile: from loaded file OR demo data
-    const { profile3D, pipeResult, featuresResult, derivedParams } = useMemo(() => {
+    const [featuresResult, setFeaturesResult] = useState([]);
+    const [mlModel, setMlModel] = useState(null);
+
+    // Load AI Model on mount
+    useEffect(() => {
+        async function loadModel() {
+            if (!window.tf) {
+                console.warn('TensorFlow.js not loaded. Check index.html');
+                return;
+            }
+            try {
+                // Look for model in public/models/tfjs_model/
+                const model = await window.tf.loadLayersModel('/models/tfjs_model/model.json');
+                console.log('AI Model loaded successfully');
+                setMlModel(model);
+            } catch (e) {
+                console.log('AI Model not found or failed to load. Using heuristic detection.', e.message);
+            }
+        }
+        loadModel();
+    }, []);
+
+    // Compute basic 3D profile & pipe: sync
+    const { profile3D, pipeResult, derivedParams } = useMemo(() => {
         try {
             let points;
             const currentTheta = Math.abs(params.laserPitch - params.camPitch);
@@ -92,10 +116,10 @@ export default function App() {
 
             if (binData && binData.profiles.length > 0) {
                 const profile = binData.profiles[selectedProfile];
-                if (!profile) return { profile3D: [], pipeResult: null, featuresResult: [], derivedParams: derived };
+                if (!profile) return { profile3D: [], pipeResult: null, derivedParams: derived };
 
                 const { pixelColumns, pixelRows } = profileToPixelCoords(profile);
-                if (pixelColumns.length < 3) return { profile3D: [], pipeResult: null, featuresResult: [], derivedParams: derived };
+                if (pixelColumns.length < 3) return { profile3D: [], pipeResult: null, derivedParams: derived };
 
                 points = triangulate2Dto3D(pixelColumns, pixelRows, derived);
             } else {
@@ -103,12 +127,12 @@ export default function App() {
                 points = demo.points;
             }
 
-            // Apply point cleaning if enabled (runs before any detection)
+            // Apply point cleaning if enabled
             const processedPoints = pointCleaningEnabled
                 ? filterNoisePoints(points, pointCleaningParams.radius, pointCleaningParams.minNeighbors)
                 : points;
 
-            // Detect pipe if enabled (run on cleaned points)
+            // Detect pipe if enabled
             let pipe = null;
             if (pipeEnabled && processedPoints.length > 10) {
                 pipe = detectPipe(processedPoints, pipeDiameter, { prevResult: lastPipeResult.current });
@@ -117,19 +141,33 @@ export default function App() {
                 }
             }
 
-            // Detect features if enabled (run on cleaned points)
-            let features = [];
-            if (featuresEnabled && processedPoints.length > 10) {
-                features = detectFeatures(processedPoints, { ...featureParams, pipeResult: pipe });
-            }
-
-            return { profile3D: processedPoints, pipeResult: pipe, featuresResult: features, derivedParams: derived };
+            return { profile3D: processedPoints, pipeResult: pipe, derivedParams: derived };
         } catch (e) {
             console.warn('Computation error:', e);
             const currentTheta = Math.abs(params.camPitch - params.laserPitch);
-            return { profile3D: [], pipeResult: null, featuresResult: [], derivedParams: { ...params, theta: currentTheta } };
+            return { profile3D: [], pipeResult: null, derivedParams: { ...params, theta: currentTheta } };
         }
-    }, [params, pipeEnabled, pipeDiameter, pointCleaningEnabled, pointCleaningParams, featuresEnabled, featureParams, binData, selectedProfile]);
+    }, [params, pipeEnabled, pipeDiameter, pointCleaningEnabled, pointCleaningParams, binData, selectedProfile]);
+
+    // Async feature detection effect
+    useEffect(() => {
+        let active = true;
+
+        async function runDetection() {
+            if (!featuresEnabled || profile3D.length < 10) {
+                setFeaturesResult([]);
+                return;
+            }
+
+            const results = await detectFeatures(profile3D, { ...featureParams, pipeResult, tfModel: mlModel });
+            if (active) {
+                setFeaturesResult(results);
+            }
+        }
+
+        runDetection();
+        return () => { active = false; };
+    }, [featuresEnabled, featureParams, profile3D, pipeResult, mlModel]);
 
     // ---- Logging Effect ----
     useEffect(() => {
@@ -166,13 +204,26 @@ export default function App() {
     }, [featuresEnabled, featuresResult, selectedProfile, binData]);
 
     const handleLabelFeature = useCallback((feature, isCorrect) => {
-        if (!window.electronAPI) return;
+        if (!window.electronAPI || !binData) return;
 
         const currentProfile = binData.profiles[selectedProfile];
+
+        // Extract the exact 3D points belonging to this feature
+        const featurePoints = feature.indices.map(idx => ({
+            x: profile3D[idx].x,
+            z: profile3D[idx].z
+        }));
+
         const labelData = {
             profileIndex: selectedProfile,
+            fileName: fileName,
             timestamp: currentProfile.comment?.timestamp,
-            feature: { ...feature, indices: undefined }, // Don't save indices to keep JSON small
+            // Full context for preprocessing neighbors and pipe distance
+            profile3D: profile3D.map(p => ({ x: p.x, z: p.z })),
+            pipeResult: pipeResult,
+            featurePoints: featurePoints,
+            triangulationParams: derivedParams,
+            feature: feature, // Keep indices!
             isCorrect: isCorrect,
             paramsUsed: featureParams,
             labeledAt: new Date().toISOString()
@@ -183,10 +234,10 @@ export default function App() {
             content: JSON.stringify(labelData)
         }).then(res => {
             if (res.success) {
-                alert(isCorrect ? 'Marked as Correct. Data saved for training.' : 'Marked as False Positive. Logic will ignore similar features in future datasets.');
+                alert(isCorrect ? 'Marked as Correct. Feature signature saved.' : 'Marked as False Positive. Context saved.');
             }
         });
-    }, [selectedProfile, binData, featureParams]);
+    }, [selectedProfile, binData, fileName, profile3D, derivedParams, featureParams, pipeResult]);
 
     // ---- ML PNG Export Effect ----
     useEffect(() => {
@@ -196,7 +247,7 @@ export default function App() {
                 return;
             }
 
-            const confirm = window.confirm(`This will play through ${binData.profileCount} profiles and export a 2048x1152 PNG for each into a "ml_dataset" folder. This may take a few moments. Proceed?`);
+            const confirm = window.confirm(`This will play through ${binData.profileCount} profiles and export a 2048x1152 PNG for each into your "Documents > Laser Analyzer Data > ml_dataset" folder. This may take a few moments. Proceed?`);
             if (!confirm) return;
 
             // Store original states
@@ -279,7 +330,7 @@ export default function App() {
             setFeaturesEnabled(originalFeaturesEnabled);
             setSelectedProfile(originalProfile);
 
-            alert(`Export complete! Saved ${binData.profileCount} images (2048x1152) to 'ml_dataset' folder.`);
+            alert(`Export complete! Saved ${binData.profileCount} images (2048x1152) to "Documents > Laser Analyzer Data > ml_dataset".`);
         };
 
         return () => {
@@ -329,6 +380,7 @@ export default function App() {
                     params={featureParams}
                     onParamsChange={setFeatureParams}
                     onLabelFeature={handleLabelFeature}
+                    onHoverFeature={setHoveredFeature}
                 />
 
                 {/* Pipe detection */}
@@ -359,7 +411,13 @@ export default function App() {
             </div>
 
             <div style={{ flex: 1, display: 'flex', minWidth: 0 }}>
-                <Viewer3D points={profile3D} pipeResult={pipeResult} features={featuresResult} params={derivedParams} />
+                <Viewer3D
+                    points={profile3D}
+                    pipeResult={pipeResult}
+                    features={featuresResult}
+                    params={derivedParams}
+                    highlightedFeature={hoveredFeature}
+                />
             </div>
         </div>
     );
